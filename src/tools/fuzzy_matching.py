@@ -2,7 +2,7 @@
 Fuzzy matching utilities for handling ambiguous entity names.
 """
 import re
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 from fuzzywuzzy import fuzz, process
 import logging
 

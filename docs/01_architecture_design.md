@@ -4,6 +4,579 @@
 
 The Clinical Supply Chain Control Tower implements a multi-agent architecture using LangGraph for orchestration. The system is designed with clear separation of concerns, where each agent has specific responsibilities and interacts with others through well-defined interfaces.
 
+---
+
+## Quick Reference: Agent Summary
+
+| # | Agent Name | Uses LLM? | Primary Function | Source File |
+|---|------------|-----------|------------------|-------------|
+| 1 | Router Agent | ❌ No | Classify & route requests | `src/agents/router_agent.py` |
+| 2 | Schema Retrieval Agent | ✅ Yes (Embeddings) | Find relevant tables via semantic search | `src/agents/schema_retrieval_agent_v2_openai.py` |
+| 3 | SQL Generation Agent | ✅ Yes (GPT-4) | Generate PostgreSQL queries | `src/agents/sql_generation_agent_v2.py` |
+| 4 | Inventory Agent | ❌ No | Stock levels & expiry tracking | `src/agents/inventory_agent.py` |
+| 5 | Demand Forecasting Agent | ❌ No | Enrollment analysis & shortfall prediction | `src/agents/demand_forecasting_agent.py` |
+| 6 | Regulatory Agent | ❌ No | Compliance & approval verification | `src/agents/regulatory_agent.py` |
+| 7 | Logistics Agent | ❌ No | Shipping timelines & feasibility | `src/agents/logistics_agent.py` |
+| 8 | Synthesis Agent | ✅ Yes (GPT-4) | Aggregate results & generate responses | `src/agents/synthesis_agent.py` |
+
+**Total: 8 Agents** | **3 use LLM** | **5 use rule-based logic**
+
+---
+
+## LLM Usage Strategy
+
+### Where LLM is Used
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        LLM USAGE IN THE SYSTEM                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐     │
+│  │ Schema Retrieval│    │ SQL Generation  │    │   Synthesis     │     │
+│  │     Agent       │    │     Agent       │    │     Agent       │     │
+│  ├─────────────────┤    ├─────────────────┤    ├─────────────────┤     │
+│  │ OpenAI          │    │ GPT-4-turbo     │    │ GPT-4-turbo     │     │
+│  │ text-embedding- │    │                 │    │                 │     │
+│  │ 3-small         │    │ Generates SQL   │    │ Reasons over    │     │
+│  │                 │    │ from natural    │    │ data & formats  │     │
+│  │ Semantic search │    │ language intent │    │ responses       │     │
+│  │ for tables      │    │                 │    │                 │     │
+│  └─────────────────┘    └─────────────────┘    └─────────────────┘     │
+│                                                                         │
+│  WHY THESE 3?                                                           │
+│  • Schema Retrieval: Semantic understanding of user intent              │
+│  • SQL Generation: Complex query construction from natural language     │
+│  • Synthesis: Natural language reasoning and response formatting        │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Where LLM is NOT Used (Rule-Based)
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    RULE-BASED AGENTS (NO LLM)                           │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐│
+│  │    Router    │  │  Inventory   │  │   Demand     │  │  Regulatory  ││
+│  │    Agent     │  │    Agent     │  │  Forecasting │  │    Agent     ││
+│  ├──────────────┤  ├──────────────┤  ├──────────────┤  ├──────────────┤│
+│  │ Keyword      │  │ SQL queries  │  │ Statistical  │  │ SQL queries  ││
+│  │ matching &   │  │ for stock &  │  │ calculations │  │ for RIM &    ││
+│  │ regex for    │  │ expiry data  │  │ for demand   │  │ re-evaluation││
+│  │ routing      │  │              │  │ projection   │  │              ││
+│  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘│
+│                                                                         │
+│  ┌──────────────┐                                                       │
+│  │  Logistics   │  WHY NO LLM?                                          │
+│  │    Agent     │  • Deterministic operations (date math, comparisons)  │
+│  ├──────────────┤  • Faster execution (no API calls)                    │
+│  │ Date calcs & │  • Lower cost (no token usage)                        │
+│  │ shipping     │  • More predictable behavior                          │
+│  │ feasibility  │                                                       │
+│  └──────────────┘                                                       │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Detailed Agent Specifications
+
+### Agent 1: Router Agent
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ ROUTER AGENT                                                            │
+├─────────────────────────────────────────────────────────────────────────┤
+│ File: src/agents/router_agent.py                                        │
+│ Uses LLM: ❌ No (keyword matching + regex)                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│ PURPOSE:                                                                │
+│ Entry point for all requests. Classifies intent and routes to          │
+│ appropriate workflow and agents.                                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│ RESPONSIBILITIES:                                                       │
+│ • Classify request as Workflow A (monitoring) or B (conversational)    │
+│ • Extract entities (batch IDs, countries, materials, trials)           │
+│ • Determine which domain agents are needed                              │
+│ • Handle ambiguous requests                                             │
+├─────────────────────────────────────────────────────────────────────────┤
+│ INPUTS:                                                                 │
+│ • User query (string)                                                   │
+│ • Context (optional dict)                                               │
+├─────────────────────────────────────────────────────────────────────────┤
+│ OUTPUTS:                                                                │
+│ • workflow: "A" or "B"                                                  │
+│ • intent: Description of user intent                                    │
+│ • required_agents: List of agents to invoke                             │
+│ • entities: Extracted batch IDs, countries, etc.                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│ TABLES ACCESSED: None (no database access)                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│ INTERACTS WITH:                                                         │
+│ → Schema Retrieval Agent (requests relevant schemas)                    │
+│ → All Domain Agents (routes requests)                                   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Agent 2: Schema Retrieval Agent
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ SCHEMA RETRIEVAL AGENT                                                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│ File: src/agents/schema_retrieval_agent_v2_openai.py                    │
+│ Uses LLM: ✅ Yes (OpenAI text-embedding-3-small)                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│ PURPOSE:                                                                │
+│ Manages context window by finding only relevant table schemas           │
+│ from 40+ tables using semantic search.                                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│ RESPONSIBILITIES:                                                       │
+│ • Query ChromaDB vector database for relevant schemas                   │
+│ • Return max 5 most relevant tables per request                         │
+│ • Format schemas for LLM consumption                                    │
+│ • Prevent context window overflow                                       │
+├─────────────────────────────────────────────────────────────────────────┤
+│ HOW IT WORKS:                                                           │
+│ 1. User query → OpenAI embedding                                        │
+│ 2. Embedding → ChromaDB similarity search                               │
+│ 3. Top 5 tables → Schema formatting                                     │
+│ 4. Formatted schemas → Domain agents                                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│ INPUTS:                                                                 │
+│ • query: User query string                                              │
+│ • workflow: "A" or "B" (optional filter)                                │
+│ • n_results: Number of tables to return (default 5)                     │
+├─────────────────────────────────────────────────────────────────────────┤
+│ OUTPUTS:                                                                │
+│ • table_names: List of relevant table names                             │
+│ • formatted_schemas: Schema text for LLM                                │
+│ • similarity_scores: Relevance scores per table                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│ TABLES ACCESSED: None (queries ChromaDB only)                           │
+├─────────────────────────────────────────────────────────────────────────┤
+│ INTERACTS WITH:                                                         │
+│ ↔ ChromaDB (vector similarity search)                                   │
+│ → All Domain Agents (provides schemas)                                  │
+│ → SQL Generation Agent (provides schemas)                               │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Agent 3: SQL Generation Agent
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ SQL GENERATION AGENT                                                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│ File: src/agents/sql_generation_agent_v2.py                             │
+│ Uses LLM: ✅ Yes (GPT-4-turbo for query generation)                     │
+├─────────────────────────────────────────────────────────────────────────┤
+│ PURPOSE:                                                                │
+│ Converts natural language intent into valid PostgreSQL queries          │
+│ with self-healing retry logic.                                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│ RESPONSIBILITIES:                                                       │
+│ • Generate PostgreSQL queries from intent + schema                      │
+│ • Execute queries against database                                      │
+│ • Implement self-healing (3 retry attempts)                             │
+│ • Auto-fix common issues (date casting, column names)                   │
+│ • Parse and translate error messages                                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│ SELF-HEALING LOOP:                                                      │
+│ ┌─────────────────────────────────────────────────────────────────┐    │
+│ │ Attempt 1: Generate query from intent                           │    │
+│ │     ↓ (if error)                                                │    │
+│ │ Attempt 2: Analyze error, fix query                             │    │
+│ │     ↓ (if error)                                                │    │
+│ │ Attempt 3: Refresh schema, regenerate                           │    │
+│ │     ↓ (if error)                                                │    │
+│ │ Return error with helpful message                               │    │
+│ └─────────────────────────────────────────────────────────────────┘    │
+├─────────────────────────────────────────────────────────────────────────┤
+│ INPUTS:                                                                 │
+│ • intent: What to query                                                 │
+│ • table_names: Tables to query                                          │
+│ • schemas: Table schema information                                     │
+│ • filters: Query filters (batch_id, country, etc.)                      │
+├─────────────────────────────────────────────────────────────────────────┤
+│ OUTPUTS:                                                                │
+│ • success: Boolean                                                      │
+│ • query: Generated SQL                                                  │
+│ • data: Query results                                                   │
+│ • row_count: Number of rows returned                                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│ TABLES ACCESSED: All tables (as needed by domain agents)                │
+├─────────────────────────────────────────────────────────────────────────┤
+│ INTERACTS WITH:                                                         │
+│ ↔ PostgreSQL (executes queries)                                         │
+│ ← All Domain Agents (receives query requests)                           │
+│ ← Schema Retrieval Agent (receives schemas)                             │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Agent 4: Inventory Agent
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ INVENTORY AGENT                                                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│ File: src/agents/inventory_agent.py                                     │
+│ Uses LLM: ❌ No (rule-based SQL queries)                                │
+├─────────────────────────────────────────────────────────────────────────┤
+│ PURPOSE:                                                                │
+│ Manages inventory-related queries including stock levels,               │
+│ batch locations, and expiry tracking.                                   │
+├─────────────────────────────────────────────────────────────────────────┤
+│ RESPONSIBILITIES:                                                       │
+│ • Check current stock levels                                            │
+│ • Identify expiring ALLOCATED batches (≤90 days)                        │
+│ • Classify expiry severity (Critical/High/Medium)                       │
+│ • Track batch locations across warehouses                               │
+├─────────────────────────────────────────────────────────────────────────┤
+│ TABLES ACCESSED:                                                        │
+│ • allocated_materials_to_orders (PRIMARY - reserved batches)            │
+│ • batch_master (expiry dates)                                           │
+│ • available_inventory_report (current stock)                            │
+│ • affiliate_warehouse_inventory (warehouse locations)                   │
+├─────────────────────────────────────────────────────────────────────────┤
+│ OPERATIONS:                                                             │
+│ • get_expiring_batches(days=90) → Expiring allocated batches            │
+│ • get_stock_level(material_id) → Current inventory                      │
+│ • get_batch_info(batch_id) → Batch details                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│ INTERACTS WITH:                                                         │
+│ → SQL Generation Agent (sends query requests)                           │
+│ → Synthesis Agent (sends results)                                       │
+│ ↔ Demand Agent (for shortfall calculations)                             │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Agent 5: Demand Forecasting Agent
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ DEMAND FORECASTING AGENT                                                │
+├─────────────────────────────────────────────────────────────────────────┤
+│ File: src/agents/demand_forecasting_agent.py                            │
+│ Uses LLM: ❌ No (statistical calculations)                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│ PURPOSE:                                                                │
+│ Analyzes enrollment data to project demand and predict                  │
+│ potential stock shortfalls.                                             │
+├─────────────────────────────────────────────────────────────────────────┤
+│ RESPONSIBILITIES:                                                       │
+│ • Calculate enrollment rates by country/trial                           │
+│ • Project 8-week demand based on enrollment trends                      │
+│ • Compare projected demand vs current inventory                         │
+│ • Identify shortfall risks                                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│ TABLES ACCESSED:                                                        │
+│ • enrollment_rate_report (enrollment trends)                            │
+│ • country_level_enrollment_report (country breakdown)                   │
+│ • study_level_enrollment_report (trial breakdown)                       │
+├─────────────────────────────────────────────────────────────────────────┤
+│ CALCULATIONS:                                                           │
+│ • Weekly enrollment rate = enrolled_patients / weeks                    │
+│ • 8-week demand = weekly_rate × 8 × doses_per_patient                   │
+│ • Shortfall = projected_demand - current_inventory                      │
+├─────────────────────────────────────────────────────────────────────────┤
+│ INTERACTS WITH:                                                         │
+│ → SQL Generation Agent (sends query requests)                           │
+│ → Synthesis Agent (sends results)                                       │
+│ ↔ Inventory Agent (gets current stock levels)                           │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Agent 6: Regulatory Agent
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ REGULATORY AGENT                                                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│ File: src/agents/regulatory_agent.py                                    │
+│ Uses LLM: ❌ No (rule-based compliance checks)                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│ PURPOSE:                                                                │
+│ Verifies regulatory compliance for shelf-life extensions                │
+│ and country-specific requirements.                                      │
+├─────────────────────────────────────────────────────────────────────────┤
+│ RESPONSIBILITIES:                                                       │
+│ • Check re-evaluation history (has batch been extended before?)         │
+│ • Verify country approval status                                        │
+│ • Validate regulatory submission status                                 │
+│ • Map countries to health authorities (EMA, FDA, PMDA, etc.)            │
+├─────────────────────────────────────────────────────────────────────────┤
+│ TABLES ACCESSED:                                                        │
+│ • re_evaluation (extension history - TECHNICAL CHECK)                   │
+│ • rim (regulatory information - REGULATORY CHECK)                       │
+│ • material_country_requirements (country approvals)                     │
+│ • qdocs (quality documents)                                             │
+├─────────────────────────────────────────────────────────────────────────┤
+│ CHECKS PERFORMED:                                                       │
+│ • Technical: Has material been re-evaluated? (max 3 extensions)         │
+│ • Regulatory: Is extension approved in target country?                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│ INTERACTS WITH:                                                         │
+│ → SQL Generation Agent (sends query requests)                           │
+│ → Synthesis Agent (sends results)                                       │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Agent 7: Logistics Agent
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ LOGISTICS AGENT                                                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│ File: src/agents/logistics_agent.py                                     │
+│ Uses LLM: ❌ No (date calculations)                                     │
+├─────────────────────────────────────────────────────────────────────────┤
+│ PURPOSE:                                                                │
+│ Assesses shipping feasibility and logistics timelines                   │
+│ for redistribution or extension scenarios.                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│ RESPONSIBILITIES:                                                       │
+│ • Calculate shipping times to target countries                          │
+│ • Assess if there's enough time before expiry                           │
+│ • Account for processing buffers (14-day minimum)                       │
+│ • Evaluate redistribution feasibility                                   │
+├─────────────────────────────────────────────────────────────────────────┤
+│ TABLES ACCESSED:                                                        │
+│ • ip_shipping_timelines_report (shipping durations - LOGISTICAL CHECK)  │
+│ • distribution_order_report (order status)                              │
+│ • shipment_status_report (shipment tracking)                            │
+├─────────────────────────────────────────────────────────────────────────┤
+│ CALCULATIONS:                                                           │
+│ • Available window = expiry_date - today                                │
+│ • Required time = shipping_days + buffer (14 days)                      │
+│ • Feasible = available_window > required_time                           │
+├─────────────────────────────────────────────────────────────────────────┤
+│ INTERACTS WITH:                                                         │
+│ → SQL Generation Agent (sends query requests)                           │
+│ → Synthesis Agent (sends results)                                       │
+│ ← Inventory Agent (receives batch expiry info)                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Agent 8: Synthesis Agent
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ SYNTHESIS AGENT                                                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│ File: src/agents/synthesis_agent.py                                     │
+│ Uses LLM: ✅ Yes (GPT-4-turbo for reasoning & formatting)               │
+├─────────────────────────────────────────────────────────────────────────┤
+│ PURPOSE:                                                                │
+│ Aggregates outputs from all agents and generates final                  │
+│ response with citations and reasoning.                                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│ RESPONSIBILITIES:                                                       │
+│ • Aggregate data from multiple domain agents                            │
+│ • Generate structured JSON (Workflow A)                                 │
+│ • Generate natural language responses (Workflow B)                      │
+│ • Include data citations for all findings                               │
+│ • Provide explicit reasoning for YES/NO decisions                       │
+├─────────────────────────────────────────────────────────────────────────┤
+│ OUTPUT FORMATS:                                                         │
+│                                                                         │
+│ Workflow A (JSON):                                                      │
+│ {                                                                       │
+│   "alert_date": "2025-12-26",                                           │
+│   "expiry_alerts": [...],                                               │
+│   "shortfall_predictions": [...]                                        │
+│ }                                                                       │
+│                                                                         │
+│ Workflow B (Natural Language):                                          │
+│ "CAN WE EXTEND BATCH LOT-123 FOR GERMANY?                               │
+│  Answer: YES                                                            │
+│  Technical Check: ✓ PASS                                                │
+│  Regulatory Check: ✓ PASS                                               │
+│  Logistical Check: ✓ PASS                                               │
+│  RECOMMENDATION: Proceed with extension..."                             │
+├─────────────────────────────────────────────────────────────────────────┤
+│ TABLES ACCESSED: None (aggregates only)                                 │
+├─────────────────────────────────────────────────────────────────────────┤
+│ INTERACTS WITH:                                                         │
+│ ← All Domain Agents (receives results)                                  │
+│ → User Interface (sends final response)                                 │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Clear Separation of Concerns
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    SEPARATION OF CONCERNS                               │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  LAYER 1: ROUTING (No DB Access)                                        │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ Router Agent                                                     │   │
+│  │ • ONLY classifies intent and routes                              │   │
+│  │ • NEVER queries database                                         │   │
+│  │ • NEVER generates SQL                                            │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│  LAYER 2: CONTEXT MANAGEMENT (Vector DB Only)                           │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ Schema Retrieval Agent                                           │   │
+│  │ • ONLY queries ChromaDB for schemas                              │   │
+│  │ • NEVER queries PostgreSQL                                       │   │
+│  │ • NEVER executes business logic                                  │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│  LAYER 3: DOMAIN LOGIC (Business Rules)                                 │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ Inventory │ Demand │ Regulatory │ Logistics                      │   │
+│  │ • ONLY handle their specific domain                              │   │
+│  │ • NEVER access tables outside their scope                        │   │
+│  │ • NEVER format final responses                                   │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│  LAYER 4: DATA ACCESS (SQL Only)                                        │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ SQL Generation Agent                                             │   │
+│  │ • ONLY generates and executes SQL                                │   │
+│  │ • NEVER interprets business meaning                              │   │
+│  │ • NEVER formats user responses                                   │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│  LAYER 5: OUTPUT (Response Only)                                        │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ Synthesis Agent                                                  │   │
+│  │ • ONLY aggregates and formats                                    │   │
+│  │ • NEVER queries database                                         │   │
+│  │ • NEVER makes routing decisions                                  │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Agent-to-Table Mapping
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    WHICH AGENT ACCESSES WHICH TABLES                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  INVENTORY AGENT                                                        │
+│  ├── allocated_materials_to_orders  ← Reserved batches (Workflow A)     │
+│  ├── batch_master                   ← Expiry dates                      │
+│  ├── available_inventory_report     ← Current stock                     │
+│  └── affiliate_warehouse_inventory  ← Warehouse locations               │
+│                                                                         │
+│  DEMAND FORECASTING AGENT                                               │
+│  ├── enrollment_rate_report         ← Enrollment trends                 │
+│  ├── country_level_enrollment_report← Country breakdown                 │
+│  └── study_level_enrollment_report  ← Trial breakdown                   │
+│                                                                         │
+│  REGULATORY AGENT                                                       │
+│  ├── re_evaluation                  ← Extension history (Technical)     │
+│  ├── rim                            ← Regulatory approvals              │
+│  ├── material_country_requirements  ← Country requirements              │
+│  └── qdocs                          ← Quality documents                 │
+│                                                                         │
+│  LOGISTICS AGENT                                                        │
+│  ├── ip_shipping_timelines_report   ← Shipping times (Logistical)       │
+│  ├── distribution_order_report      ← Order status                      │
+│  └── shipment_status_report         ← Shipment tracking                 │
+│                                                                         │
+│  SQL GENERATION AGENT                                                   │
+│  └── ALL TABLES (as requested by domain agents)                         │
+│                                                                         │
+│  ROUTER, SCHEMA RETRIEVAL, SYNTHESIS                                    │
+│  └── NO DIRECT TABLE ACCESS                                             │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+---
+
+## Data Flow: Shelf-Life Extension Query
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ USER QUERY: "Can we extend Batch LOT-45953393 for Japan?"               │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ STEP 1: ROUTER AGENT                                                    │
+│ • Extracts: batch_id="LOT-45953393", country="Japan"                    │
+│ • Classifies: Workflow B, shelf-life extension query                    │
+│ • Routes to: Inventory + Regulatory + Logistics agents                  │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ STEP 2: SCHEMA RETRIEVAL AGENT (uses OpenAI embeddings)                 │
+│ • Query: "shelf life extension batch Japan"                             │
+│ • Returns: re_evaluation, material_country_requirements,                │
+│            ip_shipping_timelines_report                                 │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                    ┌───────────────┼───────────────┐
+                    ▼               ▼               ▼
+┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
+│ TECHNICAL CHECK     │ │ REGULATORY CHECK    │ │ LOGISTICAL CHECK    │
+│ (re_evaluation)     │ │ (material_country_  │ │ (ip_shipping_       │
+│                     │ │  requirements)      │ │  timelines_report)  │
+│ SQL: SELECT * FROM  │ │ SQL: SELECT * FROM  │ │ SQL: SELECT * FROM  │
+│ re_evaluation WHERE │ │ material_country_   │ │ ip_shipping_        │
+│ lot_number ILIKE    │ │ requirements WHERE  │ │ timelines_report    │
+│ '%LOT-45953393%'    │ │ countries ILIKE     │ │ WHERE country_name  │
+│                     │ │ '%Japan%'           │ │ ILIKE '%Japan%'     │
+│                     │ │                     │ │                     │
+│ Result: 1 record    │ │ Result: 3 records   │ │ Result: 0 records   │
+│ Status: ✓ PASS      │ │ Status: ✓ PASS      │ │ Status: ⚠ INDET.    │
+└─────────────────────┘ └─────────────────────┘ └─────────────────────┘
+                    │               │               │
+                    └───────────────┼───────────────┘
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ STEP 4: SYNTHESIS AGENT (uses GPT-4 for reasoning)                      │
+│ • Aggregates all 3 check results                                        │
+│ • Determines: CONDITIONAL (logistics data missing)                      │
+│ • Generates response with citations                                     │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ FINAL RESPONSE:                                                         │
+│                                                                         │
+│ CAN WE EXTEND BATCH LOT-45953393 FOR Japan?                             │
+│                                                                         │
+│ Answer: CONDITIONAL                                                     │
+│                                                                         │
+│ Technical Check: ✓ PASS                                                 │
+│ Finding: Found 1 prior re-evaluation record(s)                          │
+│ Source: re_evaluation                                                   │
+│                                                                         │
+│ Regulatory Check: ✓ PASS                                                │
+│ Finding: Found 3 regulatory record(s) for Japan                         │
+│ Source: material_country_requirements                                   │
+│                                                                         │
+│ Logistical Check: ⚠ INDETERMINATE                                       │
+│ Finding: Could not retrieve shipping timeline data for Japan            │
+│ Source: ip_shipping_timelines_report                                    │
+│                                                                         │
+│ RECOMMENDATION: Requires additional verification.                       │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ### High-Level Architecture Diagram
 
 ```mermaid

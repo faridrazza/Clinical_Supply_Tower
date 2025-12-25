@@ -239,10 +239,19 @@ class RouterAgent(BaseAgent):
         if trials:
             entities["trials"] = trials
         
-        # Extract countries (common country names)
+        # Extract countries (comprehensive list including countries in the dataset)
         common_countries = [
+            # Major countries
             "Germany", "France", "USA", "UK", "China", "Japan", "India",
-            "Canada", "Australia", "Brazil", "Mexico", "Spain", "Italy"
+            "Canada", "Australia", "Brazil", "Mexico", "Spain", "Italy",
+            # Countries in the clinical trial dataset
+            "Zimbabwe", "Puerto Rico", "Saint Kitts and Nevis", "Christmas Island",
+            "Guinea-Bissau", "Sudan", "Taiwan", "Netherlands", "Belgium", "Switzerland",
+            "Austria", "Poland", "Sweden", "Norway", "Denmark", "Finland", "Ireland",
+            "Portugal", "Greece", "Czech Republic", "Hungary", "Romania", "Bulgaria",
+            "South Korea", "Singapore", "Malaysia", "Thailand", "Vietnam", "Philippines",
+            "Indonesia", "New Zealand", "South Africa", "Egypt", "Turkey", "Israel",
+            "Saudi Arabia", "United Arab Emirates", "Argentina", "Chile", "Colombia", "Peru"
         ]
         for country in common_countries:
             if country.lower() in query.lower():
