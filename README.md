@@ -54,7 +54,7 @@ graph TB
 ## Technology Stack
 
 - **Backend**: Python 3.11+
-- **Agent Framework**: LangGraph
+- **Agent Framework**: Custom Multi-Agent (with LangChain-OpenAI for LLM)
 - **LLM**: OpenAI GPT-4 / Anthropic Claude
 - **Database**: PostgreSQL
 - **Vector DB**: ChromaDB

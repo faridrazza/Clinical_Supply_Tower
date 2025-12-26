@@ -20,7 +20,7 @@ logging.basicConfig(
 # Page configuration
 st.set_page_config(
     page_title="Clinical Supply Chain Control Tower",
-    page_icon="🏥",
+    page_icon="⚕️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -79,15 +79,37 @@ st.markdown("""
 def main():
     """Main application entry point."""
     
+    # Initialize page state
+    if "page" not in st.session_state:
+        st.session_state.page = "Home"
+    
     # Sidebar navigation
-    st.sidebar.markdown("# 🏥 Clinical Supply Chain")
+    st.sidebar.markdown("# Clinical Supply Chain")
     st.sidebar.markdown("### Control Tower")
     st.sidebar.markdown("---")
     
-    page = st.sidebar.radio(
+    # Map display names to internal names
+    page_options = ["Home", "Monitoring Dashboard", "Conversational Assistant"]
+    
+    # Find current index based on session state
+    current_index = 0
+    if st.session_state.page in page_options:
+        current_index = page_options.index(st.session_state.page)
+    elif "Monitoring" in st.session_state.page:
+        current_index = 1
+    elif "Conversational" in st.session_state.page:
+        current_index = 2
+    
+    # Callback to update session state when radio changes
+    def on_nav_change():
+        st.session_state.page = st.session_state.nav_radio
+    
+    st.sidebar.radio(
         "Select Workflow",
-        ["🏠 Home", "📊 Monitoring Dashboard", "💬 Conversational Assistant"],
-        index=0
+        page_options,
+        index=current_index,
+        key="nav_radio",
+        on_change=on_nav_change
     )
     
     st.sidebar.markdown("---")
@@ -97,12 +119,13 @@ def main():
         "in making complex supply chain decisions for clinical trials."
     )
     
-    # Route to appropriate page
-    if page == "🏠 Home":
+    # Route to appropriate page based on session state (not radio value)
+    current_page = st.session_state.page
+    if current_page == "Home":
         show_home_page()
-    elif page == "📊 Monitoring Dashboard":
+    elif current_page == "Monitoring Dashboard":
         show_monitoring_dashboard()
-    elif page == "💬 Conversational Assistant":
+    elif current_page == "Conversational Assistant":
         show_conversational_assistant()
 
 
@@ -122,43 +145,43 @@ def show_home_page():
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("### 📊 Workflow A: Supply Watchdog")
+        st.markdown("### Workflow A: Supply Watchdog")
         st.markdown("""
         **Autonomous Monitoring System**
         
         Automatically identifies:
-        - 🔴 Expiring batches (≤90 days)
-        - 📉 Predicted stock shortfalls
-        - ⚠️ Critical supply risks
+        - Expiring batches (≤90 days)
+        - Predicted stock shortfalls
+        - Critical supply risks
         
         **Output**: Structured JSON alerts for email notifications
         """)
         
         if st.button("Go to Monitoring Dashboard", key="home_workflow_a"):
-            st.session_state.page = "📊 Monitoring Dashboard"
+            st.session_state.page = "Monitoring Dashboard"
             st.rerun()
     
     with col2:
-        st.markdown("### 💬 Workflow B: Scenario Strategist")
+        st.markdown("### Workflow B: Scenario Strategist")
         st.markdown("""
         **Conversational Decision Support**
         
         Answers queries like:
-        - 🔄 Can we extend batch expiry?
-        - 📦 What's the current stock level?
-        - 📈 Predict demand for next 8 weeks
-        - ✅ Check regulatory approvals
+        - Can we extend batch expiry?
+        - What's the current stock level?
+        - Predict demand for next 8 weeks
+        - Check regulatory approvals
         
         **Output**: Natural language responses with data citations
         """)
         
         if st.button("Go to Conversational Assistant", key="home_workflow_b"):
-            st.session_state.page = "💬 Conversational Assistant"
+            st.session_state.page = "Conversational Assistant"
             st.rerun()
     
     # System architecture
     st.markdown("---")
-    st.markdown("### 🏗️ System Architecture")
+    st.markdown("### System Architecture")
     
     st.markdown("""
     **Multi-Agent Architecture** with 8 specialized agents:
@@ -173,27 +196,27 @@ def show_home_page():
     """)
     
     # Key features
-    st.markdown("### ✨ Key Features")
+    st.markdown("### Key Features")
     
     col1, col2, col3 = st.columns(3)
     
     with col1:
         st.markdown("""
-        **🎯 Zero Hallucinations**
+        **Zero Hallucinations**
         - All responses grounded in database queries
         - Data citations for every answer
         """)
     
     with col2:
         st.markdown("""
-        **🔄 Self-Healing SQL**
+        **Self-Healing SQL**
         - Automatic error correction
         - 3-attempt retry logic
         """)
     
     with col3:
         st.markdown("""
-        **🤖 Explainable AI**
+        **Explainable AI**
         - Clear reasoning for decisions
         - Source table citations
         """)
@@ -201,7 +224,7 @@ def show_home_page():
 
 def show_monitoring_dashboard():
     """Display Workflow A: Monitoring Dashboard."""
-    st.markdown('<div class="main-header">📊 Supply Watchdog - Monitoring Dashboard</div>', 
+    st.markdown('<div class="main-header">Supply Watchdog - Monitoring Dashboard</div>', 
                 unsafe_allow_html=True)
     
     st.markdown("""
@@ -212,15 +235,15 @@ def show_monitoring_dashboard():
     col1, col2, col3 = st.columns([2, 2, 1])
     
     with col1:
-        if st.button("🔄 Run Supply Watchdog", type="primary", use_container_width=True):
+        if st.button("Run Supply Watchdog", type="primary", use_container_width=True):
             run_supply_watchdog()
     
     with col2:
-        if st.button("📥 Export JSON", use_container_width=True):
+        if st.button("Export JSON", use_container_width=True):
             export_json_results()
     
     with col3:
-        if st.button("🔍 Refresh", use_container_width=True):
+        if st.button("Refresh", use_container_width=True):
             st.rerun()
     
     st.markdown("---")
@@ -229,10 +252,10 @@ def show_monitoring_dashboard():
     if "workflow_a_result" in st.session_state:
         display_workflow_a_results(st.session_state.workflow_a_result)
     else:
-        st.info("👆 Click 'Run Supply Watchdog' to execute autonomous monitoring")
+        st.info("Click 'Run Supply Watchdog' to execute autonomous monitoring")
         
         # Show example output
-        with st.expander("📋 Example Output Structure"):
+        with st.expander("Example Output Structure"):
             st.json({
                 "alert_date": "2025-12-24",
                 "risk_summary": {
@@ -266,7 +289,7 @@ def show_monitoring_dashboard():
 
 def run_supply_watchdog():
     """Execute Workflow A and store results."""
-    with st.spinner("🔄 Running Supply Watchdog... This may take a few moments."):
+    with st.spinner("Running Supply Watchdog... This may take a few moments."):
         try:
             # Force fresh orchestrator instance to pick up code changes
             import src.workflows.orchestrator as orch_module
@@ -280,7 +303,7 @@ def run_supply_watchdog():
             st.session_state.workflow_a_timestamp = datetime.now()
             
             if result.get("success"):
-                st.success("✅ Supply Watchdog completed successfully!")
+                st.success("Supply Watchdog completed successfully!")
                 
                 # Send email alert if configured
                 try:
@@ -290,27 +313,27 @@ def run_supply_watchdog():
                     if os.getenv("RESEND_API_KEY") and os.getenv("ALERT_EMAIL_TO"):
                         email_result = send_watchdog_alert(result)
                         if email_result.get("success"):
-                            st.success(f"📧 Email alert sent to {email_result.get('to')}")
+                            st.success(f"Email alert sent to {email_result.get('to')}")
                         else:
-                            st.warning(f"📧 Email not sent: {email_result.get('error', 'Unknown error')}")
+                            st.warning(f"Email not sent: {email_result.get('error', 'Unknown error')}")
                 except Exception as email_error:
-                    st.warning(f"📧 Email service error: {str(email_error)}")
+                    st.warning(f"Email service error: {str(email_error)}")
             else:
-                st.error(f"❌ Workflow failed: {result.get('error', 'Unknown error')}")
+                st.error(f"Workflow failed: {result.get('error', 'Unknown error')}")
         
         except Exception as e:
-            st.error(f"❌ Error executing workflow: {str(e)}")
+            st.error(f"Error executing workflow: {str(e)}")
             st.exception(e)
 
 
 def display_workflow_a_results(result: dict):
     """Display Workflow A results."""
     if not result.get("success"):
-        st.error(f"❌ Workflow failed: {result.get('error', 'Unknown error')}")
+        st.error(f"Workflow failed: {result.get('error', 'Unknown error')}")
         return
     
     # Summary cards
-    st.markdown('<div class="sub-header">📈 Risk Summary</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">Risk Summary</div>', unsafe_allow_html=True)
     
     summary = result.get("summary", {})
     output = result.get("output", {})
@@ -347,20 +370,20 @@ def display_workflow_a_results(result: dict):
         shortfalls = risk_summary.get("total_shortfall_predictions", 0)
         
         if critical > 5 or shortfalls > 3:
-            risk_level = "🔴 HIGH"
+            risk_level = "HIGH"
             risk_color = "critical"
         elif critical > 0 or shortfalls > 0:
-            risk_level = "🟠 MEDIUM"
+            risk_level = "MEDIUM"
             risk_color = "high"
         else:
-            risk_level = "🟢 LOW"
+            risk_level = "LOW"
             risk_color = "success"
         
         st.markdown(f"**Risk Level**")
         st.markdown(f'<div class="{risk_color}">{risk_level}</div>', unsafe_allow_html=True)
     
     # Expiry Alerts Table
-    st.markdown('<div class="sub-header">⚠️ Expiry Alerts</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">Expiry Alerts</div>', unsafe_allow_html=True)
     
     expiry_alerts = output.get("expiry_alerts", [])
     
@@ -393,10 +416,10 @@ def display_workflow_a_results(result: dict):
         else:
             st.info("No expiry alerts matching the selected filters.")
     else:
-        st.success("✅ No batches expiring within 90 days!")
+        st.success("No batches expiring within 90 days!")
     
     # Shortfall Predictions Table
-    st.markdown('<div class="sub-header">📉 Shortfall Predictions</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">Shortfall Predictions</div>', unsafe_allow_html=True)
     
     shortfall_predictions = output.get("shortfall_predictions", [])
     
@@ -406,10 +429,10 @@ def display_workflow_a_results(result: dict):
         
         st.dataframe(df_shortfalls, use_container_width=True, height=300)
     else:
-        st.success("✅ No shortfalls predicted for the next 8 weeks!")
+        st.success("No shortfalls predicted for the next 8 weeks!")
     
     # Citations
-    with st.expander("📚 Data Sources & Citations"):
+    with st.expander("Data Sources & Citations"):
         citations = result.get("citations", [])
         if citations:
             for i, citation in enumerate(citations, 1):
@@ -422,22 +445,22 @@ def display_workflow_a_results(result: dict):
     st.markdown("---")
     col1, col2 = st.columns(2)
     with col1:
-        st.caption(f"⏰ Executed: {result.get('execution_time', 'N/A')}")
+        st.caption(f"Executed: {result.get('execution_time', 'N/A')}")
     with col2:
-        st.caption(f"🔄 Trigger: {result.get('trigger_type', 'manual')}")
+        st.caption(f"Trigger: {result.get('trigger_type', 'manual')}")
 
 
 def export_json_results():
     """Export Workflow A results as JSON."""
     if "workflow_a_result" not in st.session_state:
-        st.warning("⚠️ No results to export. Run Supply Watchdog first.")
+        st.warning("No results to export. Run Supply Watchdog first.")
         return
     
     result = st.session_state.workflow_a_result
     json_string = result.get("json_string", json.dumps(result.get("output", {}), indent=2))
     
     st.download_button(
-        label="📥 Download JSON",
+        label="Download JSON",
         data=json_string,
         file_name=f"supply_watchdog_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
         mime="application/json"
@@ -446,7 +469,7 @@ def export_json_results():
 
 def show_conversational_assistant():
     """Display Workflow B: Conversational Assistant."""
-    st.markdown('<div class="main-header">💬 Scenario Strategist - Conversational Assistant</div>', 
+    st.markdown('<div class="main-header">Scenario Strategist - Conversational Assistant</div>', 
                 unsafe_allow_html=True)
     
     st.markdown("""
@@ -547,13 +570,13 @@ def process_conversational_query(query: str) -> dict:
             }
         else:
             return {
-                "content": f"❌ Error: {result.get('error', 'Unknown error')}",
+                "content": f"Error: {result.get('error', 'Unknown error')}",
                 "citations": []
             }
     
     except Exception as e:
         return {
-            "content": f"❌ Error processing query: {str(e)}",
+            "content": f"Error processing query: {str(e)}",
             "citations": []
         }
 
