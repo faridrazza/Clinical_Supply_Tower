@@ -228,7 +228,8 @@ class RouterAgent(BaseAgent):
             entities["batches"] = batches
         
         # Extract material IDs (pattern: MAT-XXXXX)
-        material_pattern = r'(MAT-\d+|Material\s+\w+)'
+        # First try to match MAT-XXXXX pattern directly
+        material_pattern = r'(MAT-\d+)'
         materials = re.findall(material_pattern, query, re.IGNORECASE)
         if materials:
             entities["materials"] = materials

@@ -68,6 +68,8 @@ class SynthesisAgent(BaseAgent):
             # Synthesize based on workflow
             if workflow == "A" or output_format == "json":
                 result = self._synthesize_workflow_a(agent_outputs)
+            elif output_format == "extension_assessment":
+                result = self._synthesize_extension_assessment(agent_outputs, query)
             else:
                 result = self._synthesize_workflow_b(agent_outputs, query)
             
@@ -157,6 +159,166 @@ class SynthesisAgent(BaseAgent):
                 "critical_batches": len([a for a in expiry_alerts if a["severity"] == "CRITICAL"])
             }
         }
+    
+    def _synthesize_extension_assessment(
+        self,
+        agent_outputs: Dict[str, Any],
+        query: str
+    ) -> Dict[str, Any]:
+        """
+        Synthesize shelf-life extension assessment with LLM reasoning.
+        
+        Uses actual data from database to provide detailed citations.
+        """
+        extension_data = agent_outputs.get("extension_assessment", {})
+        
+        batch_id = extension_data.get("batch_id", "Unknown")
+        country = extension_data.get("country", "Unknown")
+        final_answer = extension_data.get("final_answer", "INDETERMINATE")
+        checks = extension_data.get("checks", {})
+        
+        # Format data for LLM
+        technical = checks.get("technical", {})
+        regulatory = checks.get("regulatory", {})
+        logistical = checks.get("logistical", {})
+        
+        # Build detailed data summary
+        data_summary = f"""
+BATCH: {batch_id}
+COUNTRY: {country}
+FINAL ANSWER: {final_answer}
+
+=== TECHNICAL CHECK (re_evaluation table) ===
+Status: {technical.get('status', 'UNKNOWN')}
+Data found: {len(technical.get('data', []))} record(s)
+"""
+        # Add actual technical data
+        for i, record in enumerate(technical.get('data', [])[:3], 1):
+            data_summary += f"\nRecord {i}:\n"
+            for key, value in record.items():
+                data_summary += f"  {key}: {value}\n"
+        
+        data_summary += f"""
+=== REGULATORY CHECK (material_country_requirements table) ===
+Status: {regulatory.get('status', 'UNKNOWN')}
+Data found: {len(regulatory.get('data', []))} record(s)
+"""
+        # Add actual regulatory data
+        for i, record in enumerate(regulatory.get('data', [])[:3], 1):
+            data_summary += f"\nRecord {i}:\n"
+            for key, value in record.items():
+                data_summary += f"  {key}: {value}\n"
+        
+        data_summary += f"""
+=== LOGISTICAL CHECK (ip_shipping_timelines_report table) ===
+Status: {logistical.get('status', 'UNKNOWN')}
+Data found: {len(logistical.get('data', []))} record(s)
+"""
+        # Add actual logistical data
+        for i, record in enumerate(logistical.get('data', [])[:3], 1):
+            data_summary += f"\nRecord {i}:\n"
+            for key, value in record.items():
+                data_summary += f"  {key}: {value}\n"
+        
+        # Use LLM to format response with actual data citations
+        if self.llm:
+            try:
+                reasoning_prompt = f"""You are analyzing a shelf-life extension request for a pharmaceutical batch.
+
+USER QUERY: {query}
+
+{data_summary}
+
+IMPORTANT RULES:
+1. Use ONLY the data provided above - DO NOT hallucinate or make up data
+2. If a check has no data (0 records), report it as INDETERMINATE
+3. Cite specific field values from the records (e.g., "Re-evaluation ID: REV-123, Request Type: Extension")
+4. The final answer is already determined as: {final_answer}
+
+Format your response as:
+
+[DIRECT ANSWER]
+State whether the extension can proceed: {final_answer}
+
+[DETAILED ANALYSIS with specific data points]
+
+Technical Check: [✓ PASS / ✗ FAIL / ⚠ INDETERMINATE]
+- If data exists, cite specific values: ID, request type, status, dates
+- If no data, state "No re-evaluation records found for this batch"
+- Source: re_evaluation table
+
+Regulatory Check: [✓ PASS / ✗ FAIL / ⚠ INDETERMINATE]  
+- If data exists, cite specific values: country, compound, approval status
+- If no data, state "No regulatory records found for {country}"
+- Source: material_country_requirements table
+
+Logistical Check: [✓ PASS / ✗ FAIL / ⚠ INDETERMINATE]
+- If data exists, cite specific values: shipping timeline, country
+- If no data, state "No shipping timeline data found for {country}"
+- Source: ip_shipping_timelines_report table
+
+RECOMMENDATION: Based on the {final_answer} result, provide actionable guidance.
+
+Data Sources:
+[List the tables checked with record counts]"""
+
+                response = self.llm.invoke(reasoning_prompt)
+                
+                return {
+                    "success": True,
+                    "workflow": "B",
+                    "output_format": "extension_assessment",
+                    "output": response.content,
+                    "citations": extension_data.get("citations", []),
+                    "query": query
+                }
+            except Exception as e:
+                logger.error(f"LLM reasoning failed for extension: {e}")
+        
+        # Fallback to template response
+        return {
+            "success": True,
+            "workflow": "B", 
+            "output_format": "extension_assessment",
+            "output": self._format_extension_fallback(batch_id, country, final_answer, checks),
+            "citations": extension_data.get("citations", []),
+            "query": query
+        }
+    
+    def _format_extension_fallback(
+        self,
+        batch_id: str,
+        country: str,
+        final_answer: str,
+        checks: Dict[str, Any]
+    ) -> str:
+        """Fallback template for extension response."""
+        def status_symbol(status: str) -> str:
+            if status == "PASS":
+                return "✓ PASS"
+            elif status == "FAIL":
+                return "✗ FAIL"
+            else:
+                return "⚠ INDETERMINATE"
+        
+        technical = checks.get("technical", {})
+        regulatory = checks.get("regulatory", {})
+        logistical = checks.get("logistical", {})
+        
+        response = f"""CAN WE EXTEND BATCH {batch_id} FOR {country}?
+
+Answer: {final_answer}
+
+Technical Check: {status_symbol(technical.get('status', 'INDETERMINATE'))}
+Source: {technical.get('source', 're_evaluation')}
+
+Regulatory Check: {status_symbol(regulatory.get('status', 'INDETERMINATE'))}
+Source: {regulatory.get('source', 'material_country_requirements')}
+
+Logistical Check: {status_symbol(logistical.get('status', 'INDETERMINATE'))}
+Source: {logistical.get('source', 'ip_shipping_timelines_report')}
+"""
+        return response
     
     def _synthesize_workflow_b(
         self,

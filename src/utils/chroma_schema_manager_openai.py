@@ -99,7 +99,8 @@ class ChromaSchemaManagerOpenAI:
                 "table_name": table_name,
                 "business_purpose": schema_info.get("business_purpose", ""),
                 "workflow": ",".join(schema_info.get("workflow", [])),
-                "column_count": len(schema_info.get("key_columns", []))
+                "column_count": len(schema_info.get("key_columns", [])),
+                "keywords": ",".join(schema_info.get("keywords", []))
             }
             metadatas.append(metadata)
             ids.append(table_name)
@@ -130,28 +131,39 @@ class ChromaSchemaManagerOpenAI:
         Create a comprehensive document for a table schema.
         
         This document is converted to embeddings for semantic search.
+        Includes rich metadata: keywords, sample queries, and related entities.
         
         Args:
             table_name: Name of the table
             schema_info: Schema information dictionary
             
         Returns:
-            Formatted document string
+            Formatted document string optimized for semantic search
         """
         parts = [
             f"Table: {table_name}",
             f"Purpose: {schema_info.get('business_purpose', '')}",
-            "Columns:"
         ]
         
+        # Add keywords for better semantic matching
+        keywords = schema_info.get("keywords", [])
+        if keywords:
+            parts.append(f"Keywords: {', '.join(keywords)}")
+        
+        # Add sample queries - these help match user questions
+        sample_queries = schema_info.get("sample_queries", [])
+        if sample_queries:
+            parts.append(f"Sample queries: {' | '.join(sample_queries)}")
+        
+        # Add related entities for context
+        related_entities = schema_info.get("related_entities", [])
+        if related_entities:
+            parts.append(f"Related entities: {', '.join(related_entities)}")
+        
         # Add column information
+        parts.append("Columns:")
         for col in schema_info.get("key_columns", []):
             parts.append(f"  {col['name']} ({col['type']}): {col['description']}")
-        
-        # Add workflow context
-        workflows = schema_info.get("workflow", [])
-        if workflows:
-            parts.append(f"Used in workflows: {', '.join(workflows)}")
         
         return "\n".join(parts)
     
@@ -241,11 +253,18 @@ class ChromaSchemaManagerOpenAI:
             logger.error(f"Error querying ChromaDB: {e}")
             raise
     
-    def _build_where_clause(self, workflow: str) -> Dict[str, Any]:
-        """Build ChromaDB where clause for workflow filtering."""
-        return {
-            "workflow": {"$in": [workflow]}
-        }
+    def _build_where_clause(self, workflow: str) -> Optional[Dict[str, Any]]:
+        """Build ChromaDB where clause for workflow filtering.
+        
+        Since all tables now have both workflows (A,B), we don't need to filter.
+        This method returns None to search all tables, which is the desired behavior
+        for Workflow B (conversational queries that need access to all data).
+        
+        For Workflow A (autonomous monitoring), specific tables are selected
+        programmatically rather than through ChromaDB filtering.
+        """
+        # Return None to search all tables - all tables are accessible to both workflows
+        return None
     
     def get_table_schema_document(self, table_name: str) -> Optional[str]:
         """

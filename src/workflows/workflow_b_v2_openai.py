@@ -241,14 +241,15 @@ class ScenarioStrategistWorkflowV2OpenAI:
         # Determine final answer based on all three checks
         final_answer = self._determine_extension_answer(technical_result, regulatory_result, logistical_result)
         
-        # Format response
-        response = self._format_extension_response(
-            batch_id or "Unknown",
-            country or "Unknown",
-            final_answer,
-            technical_result,
-            regulatory_result,
-            logistical_result
+        # Use LLM to format response with actual data citations
+        response = self._format_extension_response_with_llm(
+            query=query,
+            batch_id=batch_id or "Unknown",
+            country=country or "Unknown",
+            final_answer=final_answer,
+            technical=technical_result,
+            regulatory=regulatory_result,
+            logistical=logistical_result
         )
         
         return {
@@ -340,6 +341,75 @@ RECOMMENDATION: """
             response += f"Shelf-life extension for Batch {batch_id} in {country} requires additional verification. Some required data is missing or inconclusive."
         
         return response
+    
+    def _format_extension_response_with_llm(
+        self,
+        query: str,
+        batch_id: str,
+        country: str,
+        final_answer: str,
+        technical: Dict[str, Any],
+        regulatory: Dict[str, Any],
+        logistical: Dict[str, Any]
+    ) -> str:
+        """Format extension response using LLM with actual data citations."""
+        
+        # Prepare data summary for LLM
+        technical_data = technical.get("data", [])
+        regulatory_data = regulatory.get("data", [])
+        logistical_data = logistical.get("data", [])
+        
+        # Use synthesis agent if available
+        if self.synthesis and self.synthesis.llm:
+            try:
+                # Build agent outputs structure for synthesis
+                agent_outputs = {
+                    "extension_assessment": {
+                        "success": True,
+                        "batch_id": batch_id,
+                        "country": country,
+                        "final_answer": final_answer,
+                        "checks": {
+                            "technical": {
+                                "status": technical["status"],
+                                "source": technical["source"],
+                                "data": technical_data[:3] if technical_data else []
+                            },
+                            "regulatory": {
+                                "status": regulatory["status"],
+                                "source": regulatory["source"],
+                                "data": regulatory_data[:3] if regulatory_data else []
+                            },
+                            "logistical": {
+                                "status": logistical["status"],
+                                "source": logistical["source"],
+                                "data": logistical_data[:3] if logistical_data else []
+                            }
+                        },
+                        "citations": [
+                            {"table": "re_evaluation"},
+                            {"table": "material_country_requirements"},
+                            {"table": "ip_shipping_timelines_report"}
+                        ]
+                    }
+                }
+                
+                synthesis_result = self.synthesis.execute({
+                    "workflow": "B",
+                    "agent_outputs": agent_outputs,
+                    "query": query,
+                    "output_format": "extension_assessment"
+                })
+                
+                if synthesis_result.get("success") and synthesis_result.get("output"):
+                    return synthesis_result["output"]
+            except Exception as e:
+                self.logger.warning(f"LLM synthesis failed, using fallback: {e}")
+        
+        # Fallback to template-based response
+        return self._format_extension_response(
+            batch_id, country, final_answer, technical, regulatory, logistical
+        )
     
     def _execute_general_workflow(self, query: str, routing_result: Dict[str, Any]) -> Dict[str, Any]:
         """Execute general query workflow using semantic search."""

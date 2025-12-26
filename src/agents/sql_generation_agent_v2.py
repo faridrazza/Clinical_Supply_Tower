@@ -37,6 +37,19 @@ class SQLGenerationAgentV2(BaseAgent):
         """Initialize SQL Generation Agent V2."""
         super().__init__("SQLGenerationAgentV2", llm)
         self.max_retries = settings.max_sql_retries
+        
+        # Initialize LLM for SQL generation if not provided
+        if self.llm is None:
+            try:
+                from langchain_openai import ChatOpenAI
+                self.llm = ChatOpenAI(
+                    model_name=settings.llm_model,
+                    temperature=0.1,  # Low temperature for precise SQL generation
+                    api_key=settings.openai_api_key
+                )
+                logger.info("SQL Generation Agent initialized with LLM")
+            except Exception as e:
+                logger.warning(f"Could not initialize LLM for SQL generation: {e}. Using generic queries.")
     
     def execute(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -232,27 +245,21 @@ class SQLGenerationAgentV2(BaseAgent):
         prompt = f"""
 You are a PostgreSQL query generator for a pharmaceutical supply chain database.
 
-CRITICAL RULES FOR THIS DATABASE:
-1. Many date columns are stored as TEXT, not DATE type
-2. When you see a column with "date", "time", or "expir" in the name, ALWAYS cast it to DATE
-3. Use proper date arithmetic syntax
+CRITICAL RULES:
+1. Only cast columns to DATE if they contain actual dates (columns ending in _date, _time, expiry, expiration)
+2. DO NOT cast ID columns (order_id, batch_id, material_id, etc.) to DATE
+3. DO NOT cast columns like order_number, batch_number, material_number to DATE
+4. Use ILIKE for text matching when filtering by IDs
 
-EXAMPLES:
-- WRONG: WHERE expiration_date < CURRENT_DATE
-- RIGHT: WHERE expiration_date::DATE < CURRENT_DATE::DATE
+CORRECT DATE COLUMNS (cast these with ::DATE):
+- expiration_date, expiry_date, created_date, modified_date, delivery_date
+- date_of_manufacture, adjusted_expiration_date, target_date
+- Any column with "date" or "expir" in the name
 
-- WRONG: EXTRACT(DAY FROM expiry_date - CURRENT_DATE)
-- RIGHT: (expiry_date::DATE - CURRENT_DATE::DATE) as days_remaining
-
-- WRONG: ORDER BY created_date
-- RIGHT: ORDER BY created_date::DATE
-
-TEXT Date Columns (non-exhaustive list):
-expiration_date, expiry_date, created_date, modified_date, delivery_date, order_date,
-request_date, ship_date, manufacturing_date, goods_receipt_date, inspection_date,
-approval_date, release_date, start_date, end_date, actual_date, planned_date,
-scheduled_date, received_date, shipped_date, accepted_date, confirmed_date,
-issued_date, effective_date, validity_date, and any column ending in _date or _time
+NON-DATE COLUMNS (DO NOT cast these):
+- order_id, batch_id, material_id, trial_id, site_id
+- order_number, batch_number, material_number, lot_number
+- material_component, fing_batch, ly_number
 
 PRIMARY TABLE TO QUERY:
 {table_name}
