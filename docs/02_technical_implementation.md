@@ -57,7 +57,7 @@ if result["success"]:
 
 **Purpose**: Retrieve relevant table schemas from vector database using semantic search
 
-**File**: `src/tools/vector_db_tools.py`
+**File**: `src/utils/chroma_schema_manager_openai.py`
 
 **Input Parameters**:
 - `query` (string): User query or intent
@@ -84,15 +84,16 @@ if result["success"]:
 
 **Example Usage**:
 ```python
-from src.tools.vector_db_tools import retrieve_schemas_for_query
+from src.utils.chroma_schema_manager_openai import get_chroma_manager_openai
 
-schemas = retrieve_schemas_for_query(
+chroma_manager = get_chroma_manager_openai()
+schemas = chroma_manager.find_relevant_tables(
     query="expiry dates and inventory levels",
-    max_tables=5
+    n_results=5
 )
 
 for schema in schemas:
-    print(f"Table: {schema['table_name']}, Score: {schema['relevance_score']}")
+    print(f"Table: {schema['table_name']}, Score: {schema['similarity_score']}")
 ```
 
 ---
@@ -872,23 +873,23 @@ Query Patterns: SELECT * FROM available_inventory_report WHERE expiry_date <= CU
 
 ### Embedding Strategy
 
-**Model**: `all-MiniLM-L6-v2` (sentence-transformers)
-- Fast inference
-- Good semantic understanding
-- 384-dimensional embeddings
-- Suitable for schema descriptions
+**Model**: `text-embedding-3-small` (OpenAI)
+- High-quality semantic understanding
+- 1536-dimensional embeddings
+- Excellent for technical text and schema descriptions
+- Consistent with LLM provider (OpenAI)
 
 **Embedding Process**:
-1. Concatenate table metadata into single text document
-2. Generate embedding using sentence transformer
+1. Concatenate table metadata into single text document (including keywords, sample queries, related entities)
+2. Generate embedding using OpenAI API
 3. Store in ChromaDB with metadata
 4. Index by table name for direct retrieval
 
 **Why This Model**:
-- Lightweight (80MB)
-- Fast (< 100ms per embedding)
-- Good for technical text
-- Open source, no API costs
+- Superior semantic understanding
+- Consistent with OpenAI ecosystem (same provider as GPT-4)
+- Better handling of technical terminology
+- 1536 dimensions provide rich representation
 
 ### Retrieval Query Logic
 
@@ -897,8 +898,12 @@ Query Patterns: SELECT * FROM available_inventory_report WHERE expiry_date <= CU
 # 1. User query comes in
 user_query = "expiry dates and inventory levels"
 
-# 2. Embed the query
-query_embedding = embedding_model.encode(user_query)
+# 2. Generate embedding using OpenAI
+response = openai_client.embeddings.create(
+    model="text-embedding-3-small",
+    input=[user_query]
+)
+query_embedding = response.data[0].embedding
 
 # 3. Search vector database
 results = collection.query(
@@ -906,15 +911,17 @@ results = collection.query(
     n_results=5  # Maximum 5 tables
 )
 
-# 4. Return relevant schemas
+# 4. Return relevant schemas with similarity scores
 schemas = []
-for i, doc in enumerate(results['documents'][0]):
-    schema = {
-        "table_name": results['metadatas'][0][i]['table_name'],
-        "relevance_score": 1 - results['distances'][0][i],
-        "schema_text": doc
-    }
-    schemas.append(schema)
+for i, table_id in enumerate(results['ids'][0]):
+    distance = results['distances'][0][i]
+    similarity = 1 - (distance / 2)  # Normalize cosine distance
+    
+    schemas.append({
+        "table_name": table_id,
+        "similarity_score": max(0, similarity),
+        "business_purpose": results['metadatas'][0][i].get('business_purpose', '')
+    })
 
 # 5. Format for agent consumption
 formatted_schemas = format_schemas_for_agent(schemas)
@@ -928,15 +935,13 @@ formatted_schemas = format_schemas_for_agent(schemas)
 
 **Workflow-Specific Retrieval**:
 ```python
-# For Workflow A
-workflow_a_tables = [
-    "available_inventory_report",
-    "enrollment_rate_report",
-    "country_level_enrollment_report"
-]
-
-# Prioritize workflow tables, then semantic matches
-schemas = prioritize_workflow_tables(workflow_a_tables, semantic_results)
+# All tables are accessible to both workflows
+# Workflow A uses specific tables programmatically
+# Workflow B uses semantic search across all tables
+schemas = chroma_manager.find_relevant_tables(
+    query=user_query,
+    n_results=5
+)
 ```
 
 ### How This Solves Context Window Problem

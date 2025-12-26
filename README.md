@@ -231,7 +231,12 @@ pylint src/
 
 ## License
 
-MIT License
+**All Rights Reserved**
+
+This project is proprietary. No part of this codebase may be copied, modified, distributed, or used without explicit written permission from the author.
+
+
+For permission requests, please contact the author directly.
 
 ## Contact
 
